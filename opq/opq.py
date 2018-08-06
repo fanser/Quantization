@@ -111,25 +111,71 @@ def brute_force_l2(query, db):
     idxs = np.argsort(dists)
     return idxs, dists
 
+class POPQ(NPOPQ):
+    def __init__(self, subdim, num_subvec, num_center):
+        super(POPQ, self).__init__(subdim, num_subvec, num_center)
+        self.permute_R = np.zeros_like(self.R)
+        from sklearn.decomposition import PCA
+        self.pca = PCA(subdim * num_subvec)
+
+    def train(self, X, num_iters, max_iter=300):
+        X_permuted = self._eigenvalue_allocation(X)
+        print "Eigenvalue allocation done"
+        super(POPQ, self).train(X_permuted, num_iters, max_iter)
+
+    def ADC(self, query, n_keep=-1):
+        q_decorrelation = self.pca.transform(query)
+        q_permuted = q_decorrelation.dot(self.permute_R)
+        return super(POPQ, self).ADC(q_permuted, n_keep=-1)
+        
+    def SDC(self, query, n_keep=-1):
+        q_decorrelation = self.pca.transform(query)
+        q_permuted = q_decorrelation.dot(self.permute_R)
+        return super(POPQ, self).SDC(q_permuted, n_keep=-1)
+    
+    def _eigenvalue_allocation(self, X):
+        X_decorrelation = self.pca.fit_transform(X)
+        variances = self.pca.explained_variance_
+        bucket_product = np.ones(self.num_subvec)
+        bucket_free_size = np.ones(self.num_subvec, dtype=np.int32) * self.subdim
+        for i in range(self.subdim * self.num_subvec):
+            var = variances[i] 
+            bucket_idxs = np.argsort(bucket_product)
+            j = 0
+            while(bucket_free_size[bucket_idxs[j]] == 0):
+                j += 1
+            bucket_idx = bucket_idxs[j]
+            permute_idx = bucket_idx * self.subdim + (self.subdim - bucket_free_size[bucket_idx])
+            self.permute_R[permute_idx, i] = 1
+
+            bucket_product[bucket_idx] *= var
+            bucket_free_size[bucket_idx] -= 1
+            #print bucket_product
+            #print bucket_free_size
+        X_permuted = X_decorrelation.dot(self.permute_R)
+        return X_permuted
+
 if __name__ == "__main__":
     num_center = 4
-    num_subvec = 4
-    subdim = 4
-    '''
-    num_center = 256
-    num_subvec = 8
-    subdim =  128
-    '''
-
+    num_subvec = 3
+    subdim = 3
     X = np.random.randn(100, num_subvec * subdim)
+    query = X[0:1, :]
+    bf_idx, bf_dist = brute_force_l2(query, X)
+
+    popq = POPQ(subdim, num_subvec, num_center)
+    popq.train(X, 10, 1)
+
+    adc_popq_idx, adc_popq_dist = popq.ADC(query)
+    sdc_popq_idx, sdc_popq_dist = popq.SDC(query)
+    
     print "Start 1"
     opq3 = NPOPQ(subdim, num_subvec, num_center)
     opq3.train(X, 10, 1)
 
     query = X[0:1, :]
-    adc_pq_idx, adc_pq_dist = opq3.ADC(query)
-    sdc_pq_idx, sdc_pq_dist = opq3.SDC(query)
-    bf_idx, bf_dist = brute_force_l2(query, X)
+    adc_opq_idx, adc_opq_dist = opq3.ADC(query)
+    sdc_opq_idx, sdc_opq_dist = opq3.SDC(query)
     
     '''
     print "Start 2"
